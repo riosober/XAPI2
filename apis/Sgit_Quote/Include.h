@@ -10,26 +10,19 @@
 #define DLL_PUBLIC_KEY ""
 
 
+#include "../../include/CrossPlatform.h"
 #include "../../include/Sgit/SgitFtdcUserApiDataType.h"
 #include "../../include/Sgit/SgitFtdcUserApiStruct.h"
 #include "../../include/Sgit/SgitFtdcMdApi.h"
 
 using namespace fstech;
 
+#ifndef USE_CMAKE
 #ifdef _WIN64
 	#pragma comment(lib, "../../include/Sgit/win64/sgitquotapi.lib")
-	#ifdef _DEBUG
-	#pragma comment(lib, "../../lib/Queue_x64d.lib")
-	#else
-	#pragma comment(lib, "../../lib/Queue_x64.lib")
-	#endif
 #else
 	#pragma comment(lib, "../../include/Sgit/win32/sgitquotapi.lib")
-	#ifdef _DEBUG
-	#pragma comment(lib, "../../lib/Queue_x86d.lib")
-	#else
-	#pragma comment(lib, "../../lib/Queue_x86.lib")
-	#endif
+#endif
 #endif
 
 // Ìõ¼þ±àÒë

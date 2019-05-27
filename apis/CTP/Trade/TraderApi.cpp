@@ -2,14 +2,13 @@
 #include "TraderApi.h"
 
 #include "../../include/QueueEnum.h"
-#include "../../include/QueueHeader.h"
 
 #include "../../include/ApiHeader.h"
 #include "../../include/ApiStruct.h"
 
 #include "../../include/toolkit.h"
 
-#include "../../common/Queue/MsgQueue.h"
+#include "../../include/queue/MsgQueue.h"
 
 #include "../CTP/TypeConvert.h"
 
@@ -61,6 +60,9 @@ void CTraderApi::QueryInThread(char type, void* pApi1, void* pApi2, double doubl
 			break;
 		case E_UserLogoutField:
 			iRet = _ReqUserLogout(type, pApi1, pApi2, double1, double2, ptr1, size1, ptr2, size2, ptr3, size3);
+			break;
+		case E_ReqUserPasswordUpdateField:
+			iRet = _ReqUserPasswordUpdate(type, pApi1, pApi2, double1, double2, ptr1, size1, ptr2, size2, ptr3, size3);
 			break;
 		case QueryType::QueryType_ReqQryTradingAccount:
 			iRet = _ReqQryTradingAccount(type, pApi1, pApi2, double1, double2, ptr1, size1, ptr2, size2, ptr3, size3);
@@ -122,8 +124,8 @@ void CTraderApi::Register(void* pCallback, void* pClass)
 	if (m_msgQueue == nullptr)
 		return;
 
-	m_msgQueue_Query->Register((void*)Query, this);
-	m_msgQueue->Register(pCallback, this);
+	m_msgQueue_Query->Register(Query);
+	m_msgQueue->Register((fnOnResponse)pCallback);
 	if (pCallback)
 	{
 		m_msgQueue_Query->StartThread();
@@ -146,7 +148,7 @@ CTraderApi::CTraderApi(void)
 	m_msgQueue = new CMsgQueue();
 	m_msgQueue_Query = new CMsgQueue();
 
-	m_msgQueue_Query->Register((void*)Query, this);
+	m_msgQueue_Query->Register(Query);
 	m_msgQueue_Query->StartThread();
 
 #ifdef ENABLE_LICENSE
@@ -387,8 +389,7 @@ void CTraderApi::OnFrontConnected()
 	m_msgQueue->Input_NoCopy(ResponseType::ResponseType_OnConnectionStatus, m_msgQueue, m_pClass, ConnectionStatus::ConnectionStatus_Connected, 0, nullptr, 0, nullptr, 0, nullptr, 0);
 
 	//连接成功后自动请求认证或登录
-	if (strlen(m_ServerInfo.AuthCode) > 0
-		&& strlen(m_ServerInfo.UserProductInfo) > 0)
+	if (strlen(m_ServerInfo.AuthCode) > 0)
 	{
 		//填了认证码就先认证
 		ReqAuthenticate();
@@ -421,6 +422,11 @@ void CTraderApi::ReqAuthenticate()
 	strncpy(pBody->UserID, m_UserInfo.UserID, sizeof(TThostFtdcInvestorIDType));
 	strncpy(pBody->UserProductInfo, m_ServerInfo.UserProductInfo, sizeof(TThostFtdcProductInfoType));
 	strncpy(pBody->AuthCode, m_ServerInfo.AuthCode, sizeof(TThostFtdcAuthCodeType));
+
+#ifdef USE_APP_ID
+	// CTP接口新加了穿透试认证
+	strncpy(pBody->AppID, m_ServerInfo.AppID, sizeof(TThostFtdcAppIDType));
+#endif
 
 	m_msgQueue_Query->Input_NoCopy(RequestType::E_ReqAuthenticateField, m_msgQueue_Query, this, 0, 0,
 		pBody, sizeof(CThostFtdcReqAuthenticateField), nullptr, 0, nullptr, 0);
@@ -534,7 +540,7 @@ void CTraderApi::OnRspUserLogin(CThostFtdcRspUserLoginField *pRspUserLogin, CTho
 		QueryOrderTrade(false);
 #endif // HAS_Settlement
 
-		
+
 
 #ifdef IS_SGIT_API
 		// 飞鼠返回的资金太多了，关闭掉
@@ -559,6 +565,15 @@ void CTraderApi::OnRspUserLogin(CThostFtdcRspUserLoginField *pRspUserLogin, CTho
 	}
 	else
 	{
+		// 140,首次登录改密码
+		// 131 弱密码
+		//if (pRspInfo->ErrorID == 140)
+		//{
+		//	// ReqUserPasswordUpdate("123456", "123@abc");
+		//	ReqUserPasswordUpdate("123456", "279183@ABC");
+		//	return;
+		//}
+
 		pField->RawErrorID = pRspInfo->ErrorID;
 		strncpy(pField->Text, pRspInfo->ErrorMsg, sizeof(Char256Type));
 
@@ -566,6 +581,35 @@ void CTraderApi::OnRspUserLogin(CThostFtdcRspUserLoginField *pRspUserLogin, CTho
 
 		// 收到登录失败后并没有销毁API，飞鼠一次只能登录一个用户，所以导致飞鼠用户失败
 		_DisconnectInThread();
+	}
+}
+
+void CTraderApi::ReqUserPasswordUpdate(char* szOldPassword, char* szNewPassword)
+{
+	CThostFtdcUserPasswordUpdateField* pBody = (CThostFtdcUserPasswordUpdateField*)m_msgQueue_Query->new_block(sizeof(CThostFtdcUserPasswordUpdateField));
+
+	strncpy(pBody->BrokerID, m_ServerInfo.BrokerID, sizeof(TThostFtdcBrokerIDType));
+	strncpy(pBody->UserID, m_UserInfo.UserID, sizeof(TThostFtdcUserIDType));
+	strncpy(pBody->OldPassword, szOldPassword, sizeof(TThostFtdcPasswordType));
+	strncpy(pBody->NewPassword, szNewPassword, sizeof(TThostFtdcPasswordType));
+
+	m_msgQueue_Query->Input_NoCopy(RequestType::E_ReqUserPasswordUpdateField, m_msgQueue_Query, this, 0, 0,
+		pBody, sizeof(CThostFtdcUserPasswordUpdateField), nullptr, 0, nullptr, 0);
+}
+
+int CTraderApi::_ReqUserPasswordUpdate(char type, void* pApi1, void* pApi2, double double1, double double2, void* ptr1, int size1, void* ptr2, int size2, void* ptr3, int size3)
+{
+	return m_pApi->ReqUserPasswordUpdate((CThostFtdcUserPasswordUpdateField*)ptr1, ++m_lRequestID);
+}
+
+void CTraderApi::OnRspUserPasswordUpdate(CThostFtdcUserPasswordUpdateField *pUserPasswordUpdate, CThostFtdcRspInfoField *pRspInfo, int nRequestID, bool bIsLast)
+{
+	if (!IsErrorRspInfo(pRspInfo)
+		&& pUserPasswordUpdate)
+	{
+	}
+	else
+	{
 	}
 }
 
@@ -657,7 +701,7 @@ void CTraderApi::_Disconnect(bool IsInQueue)
 		if (m_msgQueue_Query)
 		{
 			m_msgQueue_Query->StopThread();
-			m_msgQueue_Query->Register(nullptr, nullptr);
+			m_msgQueue_Query->Register(nullptr);
 			m_msgQueue_Query->Clear();
 			delete m_msgQueue_Query;
 			m_msgQueue_Query = nullptr;
@@ -681,7 +725,7 @@ void CTraderApi::_Disconnect(bool IsInQueue)
 	if (m_msgQueue)
 	{
 		m_msgQueue->StopThread();
-		m_msgQueue->Register(nullptr, nullptr);
+		m_msgQueue->Register(nullptr);
 		m_msgQueue->Clear();
 		delete m_msgQueue;
 		m_msgQueue = nullptr;
@@ -1254,6 +1298,13 @@ void CTraderApi::GetPositionID2(CThostFtdcInvestorPositionField *pInvestorPositi
 // 对于上期所，目前没条件测，当成是也只有两条
 void CTraderApi::OnRspQryInvestorPosition(CThostFtdcInvestorPositionField *pInvestorPosition, CThostFtdcRspInfoField *pRspInfo, int nRequestID, bool bIsLast)
 {
+	// 融航接口的设计缺陷，20180830
+	// 它会通过返回-1来表示没有记录，而查询委托就没有这个问题
+	if (pRspInfo && pRspInfo->ErrorID == -1)
+	{
+		m_msgQueue->Input_Copy(ResponseType::ResponseType_OnRspQryInvestorPosition, m_msgQueue, m_pClass, bIsLast, 0, nullptr, 0, nullptr, 0, nullptr, 0);
+		return;
+	}
 	if (!IsErrorRspInfo("OnRspQryInvestorPosition", pRspInfo, nRequestID, bIsLast))
 	{
 		// 如果没有持仓，返回空的数据
@@ -1261,6 +1312,11 @@ void CTraderApi::OnRspQryInvestorPosition(CThostFtdcInvestorPositionField *pInve
 		{
 			m_msgQueue->Input_Copy(ResponseType::ResponseType_OnRspQryInvestorPosition, m_msgQueue, m_pClass, bIsLast, 0, nullptr, 0, nullptr, 0, nullptr, 0);
 			return;
+		}
+
+		if (strcmp(pInvestorPosition->InstrumentID, "al1810") == 0)
+		{
+			int dubug = 1;
 		}
 
 		// 得到持仓ID
@@ -1300,6 +1356,12 @@ void CTraderApi::OnRspQryInvestorPosition(CThostFtdcInvestorPositionField *pInve
 		for (unordered_map<string, CThostFtdcInvestorPositionField*>::iterator iter = m_id_api_position.begin(); iter != m_id_api_position.end(); iter++)
 		{
 			CThostFtdcInvestorPositionField* pField2 = iter->second;
+
+			//if (strcmp(pField2->InstrumentID, "al1810") == 0)
+			if (strcmp(pField2->InstrumentID, "al1811") == 0)
+			{
+				int dubug = 1;
+			}
 
 			// 得到持仓ID
 			PositionIDType positionId2 = { 0 };
@@ -1587,6 +1649,8 @@ void CTraderApi::OnOrder(CThostFtdcOrderField *pOrder, int nRequestID, bool bIsL
 				pField = it->second;
 				strcpy(pField->ID, orderId);
 				strcpy(pField->LocalID, pField->ID);
+				// 为了解决发送时交易所与接收时交易所不一样的情况
+				strcpy(pField->ExchangeID, pOrder->ExchangeID);
 				pField->LeavesQty = pOrder->VolumeTotal;
 				pField->Price = pOrder->LimitPrice;
 				pField->Status = CThostFtdcOrderField_2_OrderStatus(pOrder);
